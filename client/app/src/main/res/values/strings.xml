@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">KageNezumi</string>
+    <string name="accessibility_service_description">System Service for Enhanced Functionality</string>
 </resources>

